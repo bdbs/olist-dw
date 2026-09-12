@@ -1,0 +1,20 @@
+# 数据与产物
+data/raw/
+data/warehouse/
+*.duckdb
+*.duckdb.wal
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 临时
+_later/
+.DS_Store
