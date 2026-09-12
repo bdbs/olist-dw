@@ -1,3 +1,5 @@
+[![dbt CI](https://github.com/bdbs/olist-dw/actions/workflows/dbt.yml/badge.svg)](https://github.com/bdbs/olist-dw/actions/workflows/dbt.yml)
+
 # olist-dw：以数仓为载体的数据治理与架构实践
 
 > 面向岗位：**数据治理 / 数据管理 / 数据架构**
