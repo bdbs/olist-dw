@@ -113,27 +113,91 @@ print("      ✓ stg_orders     订单表：40,000 行")
 # ---- 表 3：订单明细表 order_items ----
 # 大白话：造 12 万条明细。一笔订单可以含多个商品，
 # 所以明细表比订单表大。这是数仓里最重要的"事实表"来源
+# ---- 表 5：卖家表 sellers ----
 con.execute("""
-CREATE OR REPLACE TABLE stg_order_items AS
+CREATE OR REPLACE TABLE stg_sellers AS
 SELECT
-    i                                            AS row_id,        -- 行号（无业务意义）
-    -- 关键设计：每 3 行归属同一笔订单，订单内序号 1/2/3 循环
-    -- 这样 (order_id, order_item_id) 组合全局唯一，符合真实业务约束
-    -- ⚠️ 必须用 //（整数除法），不能用 /
-    --    DuckDB 中 / 是浮点除法，CAST 到 INTEGER 会【四舍五入】而非截断：
-    --    (120000-1)/3 = 39999.67 → CAST 后变成 40000 → +1 = 40001
-    --    而订单表最大只有 40000，就会多出 1 条"孤儿明细"，参照完整性断言失败
-    CAST((i - 1) // 3 + 1 AS INTEGER)            AS order_id,      -- 属于哪笔订单(1~40000)
-    (i - 1) % 3 + 1                              AS order_item_id, -- 订单内第几件商品(1/2/3)
-    -- ID 范围严格控制在 1~30000，与 customers/products 表一致，避免外键越界
-    CAST(random() * 29999 AS INTEGER) + 1        AS product_id,    -- 哪个商品
-    CAST(random() * 2999 AS INTEGER) + 1         AS seller_id,     -- 哪个卖家
-    CAST(10 + random() * 490 AS DECIMAL(10,2))   AS price,         -- 商品价格
-    CAST(5 + random() * 45 AS DECIMAL(10,2))     AS freight_value  -- 运费
-FROM range(1, 120001) t(i)
+    s                                    AS seller_id,
+    CAST(random() * 99999 AS INTEGER)    AS seller_zip_code_prefix,
+    (ARRAY['sao paulo','rio de janeiro','belo horizonte',
+           'porto alegre','curitiba','florianopolis',
+           'salvador','brasilia','goiania','recife'])
+        [1 + CAST(random() * 9 AS INTEGER)]  AS seller_city,
+    (ARRAY['SP','RJ','MG','RS','PR','SC','BA','DF','GO','PE'])
+        [1 + CAST(random() * 9 AS INTEGER)]  AS seller_state
+FROM range(1, 3001) t(s)
 """)
-print("      ✓ stg_order_items 订单明细表：120,000 行（4万订单 × 3 件商品）")
+print("      ✓ stg_sellers   卖家表：3,000 行")
 
+# ---- 表 6：支付表 order_payments ----
+con.execute("""
+CREATE OR REPLACE TABLE stg_order_payments AS
+SELECT
+    o                                    AS order_id,
+    1                                    AS payment_sequential,
+    (ARRAY['credit_card','credit_card','credit_card','boleto',
+           'voucher','debit_card'])
+        [1 + CAST(random() * 5 AS INTEGER)] AS payment_type,
+    CAST(1 + random() * 10 AS INTEGER)   AS payment_installments,
+    CAST(20 + random() * 480 AS DECIMAL(12,2)) AS payment_value
+FROM range(1, 40001) t(o)
+""")
+print("      ✓ stg_order_payments 支付表：40,000 行")
+
+# ---- 表 7：评价表 order_reviews ----
+con.execute("""
+CREATE OR REPLACE TABLE stg_order_reviews AS
+SELECT
+    ROW_NUMBER() OVER (ORDER BY o)       AS review_id,
+    o                                    AS order_id,
+    CAST(1 + random() * 4 AS INTEGER)    AS review_score,
+    CASE WHEN random() < 0.3
+         THEN 'otimo produto' ELSE NULL END AS review_comment_title,
+    CASE WHEN random() < 0.4
+         THEN 'entrega rapida, recomendo' ELSE NULL END AS review_comment_message,
+    (TIMESTAMP '2016-09-01 00:00:00'
+        + INTERVAL (CAST(random() * 730 AS INTEGER)) DAY) AS review_creation_date,
+    (TIMESTAMP '2016-09-01 00:00:00'
+        + INTERVAL (CAST(random() * 730 AS INTEGER) + 1) DAY) AS review_answer_timestamp
+FROM range(1, 40001) t(o)
+WHERE random() < 0.6
+""")
+print("      ✓ stg_order_reviews 评价表：约 24,000 行")
+
+# ---- 表 8：地理表 geolocation ----
+con.execute("""
+CREATE OR REPLACE TABLE stg_geolocation AS
+SELECT
+    CAST(random() * 99999 AS INTEGER)    AS geolocation_zip_code_prefix,
+    CAST(-33.0 + random() * 20 AS DOUBLE) AS geolocation_lat,
+    CAST(-73.0 + random() * 25 AS DOUBLE) AS geolocation_lng,
+    (ARRAY['sao paulo','rio de janeiro','belo horizonte',
+           'porto alegre','curitiba','florianopolis',
+           'salvador','brasilia','goiania','recife'])
+        [1 + CAST(random() * 9 AS INTEGER)]  AS geolocation_city,
+    (ARRAY['SP','RJ','MG','RS','PR','SC','BA','DF','GO','PE'])
+        [1 + CAST(random() * 9 AS INTEGER)]  AS geolocation_state
+FROM range(1, 5001) t(g)
+""")
+print("      ✓ stg_geolocation 地理表：5,000 行")
+
+# ---- 表 9：品类翻译表 category_translation ----
+con.execute("""
+CREATE OR REPLACE TABLE stg_category_translation AS
+SELECT * FROM (VALUES
+    ('electronics',            'electronics'),
+    ('home_appliance',         'home_appliance'),
+    ('furniture_decor',        'furniture_decor'),
+    ('books',                  'books'),
+    ('sports_leisure',         'sports_leisure'),
+    ('toys',                   'toys'),
+    ('health_beauty',          'health_beauty'),
+    ('computers_accessories',  'computers_accessories'),
+    ('watches_gifts',          'watches_gifts'),
+    ('auto',                   'auto')
+) AS t(product_category_name, product_category_name_english)
+""")
+print("      ✓ stg_category_translation 品类翻译表：10 行")
 # ---- 表 4：商品表 products ----
 con.execute("""
 CREATE OR REPLACE TABLE stg_products AS
@@ -162,6 +226,11 @@ tables = {
     "stg_orders":      "olist_orders_dataset.csv",
     "stg_order_items": "olist_order_items_dataset.csv",
     "stg_products":    "olist_products_dataset.csv",
+    "stg_sellers":              "olist_sellers_dataset.csv",
+    "stg_order_payments":       "olist_order_payments_dataset.csv",
+    "stg_order_reviews":        "olist_order_reviews_dataset.csv",
+    "stg_geolocation":          "olist_geolocation_dataset.csv",
+    "stg_category_translation": "product_category_name_translation.csv",
 }
 
 for tbl, fname in tables.items():
