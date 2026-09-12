@@ -111,6 +111,20 @@ FROM range(1, 40001) t(o)
 print("      ✓ stg_orders     订单表：40,000 行")
 
 # ---- 表 3：订单明细表 order_items ----
+con.execute("""
+CREATE OR REPLACE TABLE stg_order_items AS
+SELECT
+    i                                            AS row_id,
+    CAST((i - 1) // 3 + 1 AS INTEGER)            AS order_id,
+    (i - 1) % 3 + 1                              AS order_item_id,
+    CAST(random() * 29999 AS INTEGER) + 1        AS product_id,
+    CAST(random() * 2999 AS INTEGER) + 1         AS seller_id,
+    CAST(10 + random() * 490 AS DECIMAL(10,2))   AS price,
+    CAST(5 + random() * 45 AS DECIMAL(10,2))     AS freight_value
+FROM range(1, 120001) t(i)
+""")
+print("      ✓ stg_order_items 订单明细表：120,000 行（4万订单 × 3 件商品）")
+
 # 大白话：造 12 万条明细。一笔订单可以含多个商品，
 # 所以明细表比订单表大。这是数仓里最重要的"事实表"来源
 # ---- 表 5：卖家表 sellers ----
