@@ -1,0 +1,52 @@
+# ============================================================
+# dbt 项目主配置文件
+# ------------------------------------------------------------
+# 作用：告诉 dbt 你的项目叫什么、模型放在哪、每层怎么建表
+# 小白提示：这个文件你基本不用改，照抄即可
+# ============================================================
+
+name: 'olist_dw'
+version: '1.0.0'
+config-version: 2
+
+profile: 'olist_dw'          # 对应 profiles.yml 里的名字，必须一致
+
+model-paths: ["models"]      # 模型（SQL 文件）存放目录
+seed-paths: ["seeds"]        # 种子数据（小维表 CSV）目录
+test-paths: ["tests"]        # 自定义测试目录
+snapshot-paths: ["snapshots"]# 快照（历史追踪）目录
+macro-paths: ["macros"]      # 宏（可复用 SQL 片段）目录
+
+target-path: "target"        # dbt 生成的文档/编译结果放这里（不用提交 Git）
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# ============================================================
+# 分层物化策略 —— 这是数仓分层的核心配置
+# ------------------------------------------------------------
+# materialized（物化方式）四种，用大白话说：
+#   view      视图：不存数据，每次查询现算。省空间，适合贴源层
+#   table     表：真的建一张表存数据。查得快，适合明细层和集市层
+#   ephemeral 临时：不建任何东西，把 SQL 塞进引用它的模型里。适合中间逻辑
+#   incremental 增量：只处理新增数据。第一周先不学，第二周再说
+# ============================================================
+models:
+  olist_dw:
+    staging:
+      +materialized: view          # ODS 贴源层：用视图，不占空间，永远和原始数据一致
+      +schema: staging
+    intermediate:
+      +materialized: ephemeral    # 中间层：不落表，纯逻辑复用
+    marts:
+      core:
+        +materialized: table      # DWD 明细层：建实体表，星型模型在这里
+        +schema: core
+      analytics:
+        +materialized: table      # DWS/ADS 应用层：建实体表，给 BI 用
+        +schema: analytics
+
+# 变量：全项目可复用的配置值
+vars:
+  start_date: '2016-09-01'
+  end_date:   '2018-10-31'

@@ -1,0 +1,165 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: "【贴源层】客户表。来源：olist_customers_dataset.csv。原样搬运，仅做类型转换与字段改名，不做业务逻辑。粒度：一行 = 一个客户。"
+    columns:
+      - name: customer_id
+        description: "客户ID，主键。同一客户多次下单时该ID不变。"
+        tests:
+          - unique
+          - not_null
+      - name: customer_unique_id
+        description: "客户唯一标识。同一自然人可能对应多个 customer_id。"
+      - name: customer_zip_code_prefix
+        description: "邮编前缀。"
+      - name: customer_city
+        description: "客户所在城市，已做去空格与小写标准化。"
+      - name: customer_state
+        description: "客户所在州，2位大写缩写（如 SP、RJ）。"
+      - name: updated_at
+        description: "记录最后更新时间。供 SCD Type 2 快照（snap_customers）判断数据变化。真实项目中应取自源系统时间戳，本项目以装载时间代替。"
+
+  - name: stg_orders
+    description: "【贴源层】订单表。来源：olist_orders_dataset.csv。原样搬运，不过滤任何状态。粒度：一行 = 一笔订单。"
+    columns:
+      - name: order_id
+        description: "订单ID，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "下单客户ID，外键指向 stg_customers。"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+      - name: order_status
+        description: "订单状态。真实数据共 8 种：delivered（已送达）、shipped（已发货）、canceled（已取消）、unavailable（不可用）、invoiced（已开票）、processing（处理中）、created（已创建）、approved（已付款）。口径约定：只有 delivered 计入 GMV，其余 7 种均不计入。"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['delivered', 'shipped', 'canceled', 'unavailable', 'invoiced', 'processing', 'created', 'approved']
+      - name: order_purchased_at
+        description: "下单时间戳。"
+
+  - name: stg_order_items
+    description: "【贴源层】订单明细表。来源：olist_order_items_dataset.csv。这是事实表 fct_orders 的主要数据来源。粒度：一行 = 一笔订单中的一个商品。"
+    columns:
+      - name: order_id
+        description: "所属订单ID，外键指向 stg_orders。"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_orders')
+              field: order_id
+      - name: order_item_id
+        description: "订单内商品序号，1 开始。"
+        tests:
+          - not_null
+      - name: product_id
+        description: "商品ID，外键指向 stg_products。"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_products')
+              field: product_id
+      - name: seller_id
+        description: "卖家ID。"
+      - name: price
+        description: "商品价格（BRL）。不含运费。"
+      - name: freight_value
+        description: "运费（BRL）。"
+
+  - name: stg_products
+    description: "【贴源层】商品表。来源：olist_products_dataset.csv。粒度：一行 = 一个商品。"
+    columns:
+      - name: product_id
+        description: "商品ID，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: product_category_name
+        description: "商品品类（葡萄牙文）。真实数据中存在约 610 条 NULL，下游 dim_products 会归入未知品类。"
+      - name: product_weight_g
+        description: "商品重量（克）。"
+
+  - name: stg_order_payments
+    description: "【贴源层】支付明细表。来源：olist_order_payments_dataset.csv。粒度：一行 = 一笔订单的一次支付。注意：一笔订单可有多笔支付（组合支付），payment_sequential 标识序号。"
+    columns:
+      - name: order_id
+        description: "所属订单ID。⚠️ 可能存在少数在订单表找不到的孤儿支付记录，已由 fct_payments.is_orphan_payment 标记。"
+      - name: payment_sequential
+        description: "同一订单内的支付序号，1 开始。"
+      - name: payment_type
+        description: "支付方式：credit_card（信用卡）、boleto（银行付款单）、voucher（优惠券）、debit_card（借记卡）。巴西电商 boleto 占比高但履约周期长。"
+        tests:
+          - not_null
+      - name: payment_installments
+        description: "分期数。1 = 一次性付清。"
+      - name: payment_value
+        description: "该笔支付金额（BRL）。用于与订单金额对账（应收 vs 实收）。"
+
+  - name: stg_order_reviews
+    description: "【贴源层】订单评价表。来源：olist_order_reviews_dataset.csv。粒度：一行 = 一条评价。⚠️★ 真实数据中 reviews 与 orders 是多对多关系：既有「一单多评」也有「一评多单」；且 review_id 单独不唯一，主键为组合代理键 review_key。"
+    columns:
+      - name: review_key
+        description: "★ 组合代理键（review_id || '-' || order_id）。实测完全重复行=0，故该组合唯一，作为本表主键。源系统无可靠主键时，数仓自建代理键是标准做法。"
+        tests:
+          - unique
+          - not_null
+      - name: review_id
+        description: "评价ID。⚠️ 非唯一：789 个 review_id 被多个订单共用（764个对应2单、25个对应3单）。仅作业务标识，不作主键。"
+        tests:
+          - not_null
+      - name: order_id
+        description: "所属订单ID。一个订单可能对应多条评价（真实脏数据）。"
+      - name: review_score
+        description: "评分 1-5，5 最高。口径约定：4-5 好评、3 中评、1-2 差评。"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+      - name: review_comment_message
+        description: "评论正文。大量为空（用户只打分不写评论），属正常现象。"
+      - name: review_created_at
+        description: "评价提交时间。用于判断同一订单哪条评价最新。"
+
+  - name: stg_sellers
+    description: "【贴源层】卖家表。来源：olist_sellers_dataset.csv。粒度：一行 = 一个卖家。结构与 stg_customers 对称，同属参与方实体。"
+    columns:
+      - name: seller_id
+        description: "卖家ID，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: seller_city
+        description: "卖家所在城市，已去空格并转小写。"
+      - name: seller_state
+        description: "卖家所在州，2 位大写缩写。口径与 stg_customers.customer_state 一致（一致性维度）。"
+
+  - name: stg_geolocation
+    description: "【贴源层】地理位置表。来源：olist_geolocation_dataset.csv，100 万行，本项目最大表。⚠️ 同一邮编重复几十到几百次（不同测量点经纬度微差），ODS 层保持原样不去重，去重在 DWD 层 dim_geography 进行。"
+    columns:
+      - name: zip_code_prefix
+        description: "邮编前缀。⚠️ 非唯一，约 100 万行对应 1.9 万个唯一邮编。"
+      - name: latitude
+        description: "纬度。巴西南半球，值为负（约 -5 ~ -33）。"
+      - name: longitude
+        description: "经度。"
+      - name: geo_state
+        description: "所属州，2 位大写缩写。"
+
+  - name: stg_category_translation
+    description: "【贴源层】品类名称翻译码表。来源：product_category_name_translation.csv，仅 71 行。属参照数据（Reference Data），葡文品类名 → 英文标准名映射。"
+    columns:
+      - name: category_name_pt
+        description: "葡萄牙文品类名，主键。对应 dim_products 的 product_category。"
+        tests:
+          - unique
+          - not_null
+      - name: category_name_en
+        description: "英文标准品类名。"
+        tests:
+          - not_null

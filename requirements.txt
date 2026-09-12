@@ -1,0 +1,12 @@
+# Python 依赖清单
+# 安装命令：uv pip install -r requirements.txt
+# 若网络慢，加清华源：
+#   uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 说明：本项目不依赖 dbt-expectations，
+#       数值区间等规则用自研通用测试实现（见 tests/generic/）
+
+dbt-core>=1.7,<2.0
+dbt-duckdb>=1.7,<2.0
+duckdb>=1.0
+pandas>=2.0

@@ -1,0 +1,170 @@
+version: 2
+
+models:
+  - name: dws_customer_rfm
+    description: >
+      【DWS 汇总层】客户 RFM 价值分层。
+      使用窗口函数 NTILE(4) 对 R/F/M 三个维度各打 1-4 分，并输出业务分层标签。
+      仅统计已送达订单（is_delivered = TRUE）。
+    columns:
+      - name: customer_id
+        description: 客户ID，主键。
+        tests:
+          - unique
+          - not_null
+      - name: r_score
+        description: 最近购买时间分（1=最久未购，4=最近有购）。
+        tests:
+          - accepted_values:
+              values: [1, 2, 3, 4]
+      - name: f_score
+        description: 购买频次分（1=最低，4=最高）。
+      - name: m_score
+        description: 消费金额分（1=最低，4=最高）。
+      - name: rfm_total
+        description: R+F+M 总分，范围 3-12，用于粗分层。
+        tests:
+          - assert_value_range:
+              min_value: 3
+              max_value: 12
+      - name: rfm_segment
+        description: >
+          业务分层标签：高价值客户/重要挽留客户/新客低价值/流失客户/一般客户。
+          分层规则见模型 SQL 注释。
+
+  - name: ads_gmv_monthly
+    description: >
+      【ADS 集市层】月度 GMV 趋势，BI 看板主表。
+      同时输出三种口径金额（gmv_all / gmv_delivered / gmv_cancelled）。
+      【对外统一口径为 gmv_delivered】。
+    columns:
+      - name: order_month
+        description: 月份（月首日期）。
+        tests:
+          - not_null
+      - name: gmv_delivered
+        description: ✅ 标准 GMV 口径（仅已送达订单）。对外报表统一使用此字段。
+      - name: gmv_all
+        description: ⚠️ 含取消订单的金额，仅用于对比分析，不作为对外口径。
+      - name: cancel_rate_pct
+        description: 取消订单占比（百分比）。
+        tests:
+          - assert_value_range:
+              min_value: 0
+              max_value: 100
+
+  - name: ads_category_sales
+    description: 【ADS 集市层】品类销售分析，含 GMV 占比。
+    columns:
+      - name: product_category_cn
+        description: 品类中文名。
+      - name: gmv
+        description: 该品类 GMV（仅已送达）。
+      - name: gmv_share_pct
+        description: 该品类 GMV 占全站比例（百分比）。
+
+  - name: ads_region_overview
+    description: 【ADS 集市层】区域销售概览，按大区/州聚合。
+    columns:
+      - name: region
+        description: 大区。
+      - name: gmv
+        description: 该区域 GMV（仅已送达）。
+
+  - name: dws_seller_performance
+    description: "【DWS】卖家绩效宽表。粒度：一行 = 一个卖家。★ 演示了 fan-out（扇出）陷阱的正确规避方式：订单侧与评价侧各自先聚合到「一个卖家一行」，再 LEFT JOIN 关联，避免直接 JOIN 多对多导致金额翻倍。"
+    columns:
+      - name: seller_id
+        description: "卖家ID，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: gmv_delivered
+        description: "标准 GMV 口径（仅已送达订单）。与 fct_orders 口径一致。"
+      - name: avg_review_score
+        description: "平均评分。无评价的卖家为 NULL（用 LEFT JOIN 保留，零评价新卖家是需要关注的群体）。"
+      - name: seller_tier
+        description: "卖家价值分层（派生字段下沉）：A_核心卖家(>=10万) / B_重点卖家(>=2万) / C_普通卖家 / D_无成交。"
+        tests:
+          - accepted_values:
+              values: ['A_核心卖家', 'B_重点卖家', 'C_普通卖家', 'D_无成交']
+      - name: is_risk_seller
+        description: "风险标记：有成交但平均分低于 3。用于运营主动干预。"
+
+  - name: ads_payment_analysis
+    description: "【ADS】支付方式分析看板表。粒度：一行 = 一种支付方式。给财务/运营看支付结构、分期比例、金额占比。"
+    columns:
+      - name: payment_type
+        description: "支付方式，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: total_amount
+        description: "该支付方式的总金额。"
+        tests:
+          - not_null
+      - name: amount_share_pct
+        description: "金额占比（%）。用窗口函数 SUM() OVER () 计算全表总计。"
+      - name: installment_rate_pct
+        description: "分期付款占比（%）。分期涉及资金成本，是财务关注重点。"
+
+  - name: ads_review_analysis
+    description: "【ADS】评价分析看板表。粒度：一行 = 一个月份。★ 评分是先行指标：GMV 下跌前评分往往已连续下滑数月，用于早期预警。"
+    columns:
+      - name: order_month
+        description: "下单月份，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: avg_review_score
+        description: "月度平均评分。"
+      - name: good_rate_pct
+        description: "好评率（4-5 分占比，%）。"
+      - name: bad_rate_pct
+        description: "差评率（1-2 分占比，%）。"
+      - name: nps_simplified
+        description: "简化净推荐值 = 好评率 - 差评率。标准 NPS 用 9-10 分与 0-6 分，此处按 5 分制调整。"
+      - name: health_level
+        description: "健康度评级（派生字段下沉）：excellent(>=4.2) / good(>=3.8) / warning(>=3.5) / critical。"
+        tests:
+          - accepted_values:
+              values: ['excellent', 'good', 'warning', 'critical', 'unknown']
+
+  - name: ads_kpi_summary
+    description: "【ADS】核心指标汇总表（指标目录）。粒度：一行 = 一个指标。★ 治理核心交付物：把指标的【口径】与【数值】放在一起管理，消除'同一个指标不同报表算法不同'的歧义。长表设计，新增指标只需加一行，表结构不变。"
+    columns:
+      - name: metric_id
+        description: "指标编号，主键。格式 KPI + 三位序号。"
+        tests:
+          - unique
+          - not_null
+      - name: metric_name_cn
+        description: "指标中文名，业务方使用的名称。"
+        tests:
+          - not_null
+      - name: metric_name_en
+        description: "指标英文标识，代码中使用。"
+        tests:
+          - not_null
+      - name: metric_domain
+        description: "所属主题域：交易域/客户域/评价域/卖家域/支付域/参照。"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['交易域', '客户域', '评价域', '卖家域', '支付域', '参照']
+      - name: metric_value
+        description: "指标数值。所有指标统一用数值型存储，单位见 metric_unit。"
+        tests:
+          - not_null
+      - name: metric_unit
+        description: "单位：BRL（巴西雷亚尔）/ 单 / 人 / 家 / 分 / % / 月。"
+      - name: metric_definition
+        description: "★ 指标口径定义。这是本表最重要的字段——查数值的同时看到定义，从源头消除歧义。"
+        tests:
+          - not_null
+      - name: data_source
+        description: "数据来源模型与字段，支持血缘追溯。"
+      - name: metric_owner
+        description: "指标责任人。口径变更须由责任人审批。"
+      - name: update_freq
+        description: "更新频率。"

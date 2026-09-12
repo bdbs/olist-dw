@@ -1,0 +1,185 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: >
+      【DWD 明细层】订单明细事实表 —— 本数仓的核心表。
+      粒度：一行 = 一笔订单中的一个商品。
+      由 stg_order_items INNER JOIN stg_orders 生成。
+
+      ⚠️ 口径说明（重要）：
+      本表已通过 is_delivered / is_cancelled 标记位统一业务口径，
+      下游所有 GMV 计算必须引用这些标记位，不得自行用 order_status 过滤，
+      以避免指标口径不一致。
+    columns:
+      - name: order_item_key
+        description: 代理主键，由 order_id + order_item_id 拼接而成。
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: 订单ID。
+        tests:
+          - not_null
+      - name: customer_id
+        description: 客户ID，外键指向 dim_customers。
+        tests:
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
+      - name: product_id
+        description: 商品ID，外键指向 dim_products。
+        tests:
+          - relationships:
+              to: ref('dim_products')
+              field: product_id
+      - name: order_status
+        description: 订单状态，原样保留，不做过滤。
+      - name: order_date
+        description: 下单日期（已去除时分秒）。
+      - name: order_amount
+        description: >
+          订单行总金额 = 商品价格 + 运费，单位 BRL。
+          已用 COALESCE 处理空值，保证金额字段永不为空。
+        tests:
+          - not_null
+          - assert_value_range:
+              min_value: 0
+              max_value: 200000
+      - name: is_delivered
+        description: >
+          是否已送达（order_status = 'delivered'）。
+          【这是 GMV 计算的标准口径标记位】。
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: is_cancelled
+        description: 是否已取消（order_status = 'canceled'），用于取消率分析。
+
+  - name: dim_customers
+    description: >
+      【DWD 明细层】客户维度表。
+      在贴源层基础上派生了 region（大区）和 is_core_market（核心市场）字段，
+      目的是把地理口径统一在维度层，避免下游重复定义。
+    columns:
+      - name: customer_id
+        description: 客户ID，主键。
+        tests:
+          - unique
+          - not_null
+      - name: region
+        description: >
+          客户所属大区，按州归集：southeast/south/northeast/center_west/other。
+          此字段为本项目统一定义，下游直接引用。
+        tests:
+          - accepted_values:
+              values: ['southeast', 'south', 'northeast', 'center_west', 'other']
+      - name: is_core_market
+        description: 是否核心市场（SP、RJ 为是）。业务口径由数据团队与市场部共同确认。
+
+  - name: dim_products
+    description: >
+      【DWD 明细层】商品维度表。
+      派生了 product_category_cn（中文品类名）和 weight_tier（重量档位）。
+    columns:
+      - name: product_id
+        description: 商品ID，主键。
+        tests:
+          - unique
+          - not_null
+      - name: product_category_cn
+        description: 品类中文名，供 BI 看板直接展示，避免各分析师自行翻译导致不一致。
+      - name: weight_tier
+        description: 重量档位：heavy(≥2000g)/medium(≥500g)/light/other。
+
+  - name: dim_sellers
+    description: "【DWD】卖家维度表。粒度：一行 = 一个卖家。与 dim_customers 构成一致性维度（同样的 region 划分与 is_core_market 口径），支持跨主题分析。"
+    columns:
+      - name: seller_id
+        description: "卖家ID，主键。"
+        tests:
+          - unique
+          - not_null
+      - name: seller_state
+        description: "所在州，2位大写缩写。"
+      - name: region
+        description: "大区划分（派生字段下沉）：sudeste/sul/nordeste/centro_oeste/outros。口径与 dim_customers.region 完全一致。"
+        tests:
+          - accepted_values:
+              values: ['sudeste', 'sul', 'nordeste', 'centro_oeste', 'outros']
+      - name: is_core_market
+        description: "是否核心市场（SP/RJ）。派生字段，避免 BI 层重复写 CASE WHEN。"
+
+  - name: dim_geography
+    description: "【DWD】地理维度表。粒度：一行 = 一个邮编前缀。★ 处理了源表 100 万行邮编重复的质量问题：按邮编聚合取平均经纬度（区域质心），并从 100 万行压缩到约 1.9 万行。"
+    columns:
+      - name: zip_code_prefix
+        description: "邮编前缀，主键。源表同一邮编重复多条，此处已聚合为一行。"
+        tests:
+          - unique
+          - not_null
+      - name: latitude_avg
+        description: "平均纬度（区域质心）。取平均而非取第一条，保证语义明确、结果可复现。"
+      - name: longitude_avg
+        description: "平均经度。"
+      - name: measurement_count
+        description: "原始测量点数。保留用于溯源：测量点多代表数据密度高（可能是市中心）。"
+      - name: geo_state
+        description: "所属州，取该邮编下出现最多的值（MODE）。"
+
+  - name: fct_payments
+    description: "【DWD】支付事实表。粒度：一行 = 一笔订单的一次支付。核心价值：量化应收（订单金额）与实收（支付金额）的差异，是财务对账的基础。"
+    columns:
+      - name: payment_key
+        description: "主键：order_id + '-' + payment_sequential 拼接。"
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "订单ID，外键指向 stg_orders。⚠️ 存在少数孤儿支付（订单不存在），用 LEFT JOIN 保留并由 is_orphan_payment 标记——钱收了但订单找不到是最需要告警的情况。"
+      - name: payment_type
+        description: "支付方式。"
+        tests:
+          - not_null
+      - name: payment_value
+        description: "本次支付金额（BRL）。"
+        tests:
+          - not_null
+      - name: is_orphan_payment
+        description: "★ 质量问题标记：支付记录找不到对应订单。TRUE 表示异常，需人工核查。"
+        tests:
+          - accepted_values:
+              values: [true, false]
+
+  - name: fct_reviews
+    description: "【DWD】评价事实表。粒度：一行 = 一条评价。★ 处理了 reviews 与 orders 多对多的质量问题：① 一单多评——用 ROW_NUMBER 标记最新一条（is_latest_review），下游过滤以防 fan-out；② 一评多单——用 is_shared_review_id 标记共用评价ID。主键为组合代理键 review_key。"
+    columns:
+      - name: review_key
+        description: "★ 组合代理键（review_id || '-' || order_id），主键。实测唯一。"
+        tests:
+          - unique
+          - not_null
+      - name: review_id
+        description: "评价ID。⚠️ 非唯一（789个被多订单共用），仅作业务标识。"
+        tests:
+          - not_null
+      - name: order_id
+        description: "所属订单ID。一个订单可能对应多条评价。"
+      - name: review_score
+        description: "评分 1-5。口径：4-5 好评、3 中评、1-2 差评。"
+        tests:
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+      - name: is_latest_review
+        description: "★ 是否为该订单最新的一条评价。下游做订单级分析时必须用它过滤，否则会因一单多评导致重复计数。"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: is_duplicate_review
+        description: "★ 质量问题标记A（一单多评）：该订单存在多条评价。TRUE 表示源数据异常。"
+      - name: is_shared_review_id
+        description: "★ 质量问题标记B（一评多单）：该 review_id 被多个订单共用。实测 789 个ID共用，影响 1,603 行。"
+      - name: has_comment
+        description: "是否填写了文字评论。大量用户只打分不写评论。"

@@ -1,0 +1,21 @@
+# ============================================================
+# dbt 连接配置文件（模板）
+# ------------------------------------------------------------
+# 用法：把本文件复制到 C:\Users\<你的用户名>\.dbt\profiles.yml
+#       然后把 path 改成你自己电脑上的实际路径
+#
+# ⚠️ 最容易踩的坑：Windows 路径必须用正斜杠 / 或双反斜杠 \\
+#    写成 D:\projects\olist-dw 会解析失败！
+# ============================================================
+
+olist_dw:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb                                    # 数据库类型
+      path: 'D:/projects/olist-dw/data/warehouse/olist.duckdb'
+      threads: 8                                      # 用 8 个物理核（别写 16，会降频）
+      settings:
+        memory_limit: '20GB'                          # 你有 32G，留 12G 给系统
+        threads: 8
+        enable_progress_bar: true
